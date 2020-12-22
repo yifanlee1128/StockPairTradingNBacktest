@@ -4,7 +4,7 @@ import wrds
 from collections import defaultdict
 from statsmodels.tsa.vector_ar.vecm import coint_johansen
 import datetime
-
+import statsmodels.api as sm
 
 def correlation_from_covariance(covariance):
     v = np.sqrt(np.diag(covariance))
@@ -71,6 +71,48 @@ def CorrelationTest(pairs, start_date, end_date, data, numOfPC, func):
     for pair in pairs:
         ans[pair] = new_corr.loc[pair[0], pair[1]]
     return ans
+
+
+def OUCalibration(pairs, start_date, end_date, data):
+    """
+    pair: list of tuple
+    date: datetime.date(YYYY,MM,DD)
+    data: sym_pairs_ts
+    """
+    timestamp = np.array(list(data[pairs[0]]["first"].keys())).flatten()
+    dateRange = (timestamp >= start_date) & (timestamp <= end_date)
+    ans = {}
+    deltat = 1 / 252
+    for pair in pairs:
+        t1 = np.log(np.array(list(data[pair]["first"].values())).flatten()[dateRange])
+        t2 = np.log(np.array(list(data[pair]["second"].values())).flatten()[dateRange])
+
+        t2_constant = sm.add_constant(t2)
+        model2 = sm.OLS(t1, t2_constant)
+        result2 = model2.fit()
+        a1, b1 = result2.params
+        print(np.mean(result2.resid))
+
+        Xt = t1 - a1 - b1 * t2
+        y = Xt[1:]
+        x = Xt[:-1]
+        x = sm.add_constant(x)
+        model = sm.OLS(y, x)
+        results = model.fit()
+        a, b = results.params
+        std_residual = np.std(results.resid)
+
+        theta = -np.log(b) / deltat
+        mu = a / (1 - b)
+        sigma = std_residual * np.sqrt(2 * theta / (1 - b ** 2))
+        print(mu)
+
+        ans[pair] = {"half_life": np.log(2) / theta * 252, "mu": mu, "sigma": sigma / np.sqrt(2 * theta), "const": a1,
+                     "coef": b1}
+
+    return ans
+
+
 
 if __name__=="__main__":
     db = wrds.Connection(wrds_username="hanyuzhang")
